@@ -2,15 +2,26 @@ module Main exposing (..)
 
 import Html exposing (Html, text)
 import Html.Events exposing (onClick)
-import Http
+import Json.Decode as JD
+import Parallel.Http as Http
+import RemoteData exposing (RemoteData(..), WebData)
 import Task exposing (Task)
 
 
-requestBoth : Task Http.Error ()
+type alias Resp =
+    { version : String, license : String }
+
+
+requestBoth : Task Http.Error Resp
 requestBoth =
-    Http.map2 (\_ _ -> ())
-        (Http.getString "/.gitpignore" |> Http.map (always ()))
-        (Http.getString "/besluitvorming-frontend.zip" |> Http.map (always ()))
+    Http.map2 Resp
+        (Http.get "/elm-package.json" (JD.field "summary" JD.string))
+        (Http.get "/elm-package.json" (JD.field "license" JD.string))
+        |> Http.andThen
+            (\resp ->
+                Http.get "/elm-package.json" (JD.field "version" JD.string)
+                    |> Http.map (always resp)
+            )
         |> Http.toTask
 
 
@@ -20,14 +31,14 @@ type Msg
 
 
 type alias Model =
-    Result Http.Error ()
+    WebData Resp
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         Send ->
-            ( model, requestBoth |> Task.attempt Receive )
+            ( Loading, requestBoth |> RemoteData.fromTask |> Task.perform Receive )
 
         Receive m ->
             ( m, Cmd.none )
@@ -44,7 +55,7 @@ view model =
 main : Program Never Model Msg
 main =
     Html.program
-        { init = ( Ok (), Cmd.none )
+        { init = ( NotAsked, Cmd.none )
         , update = update
         , view = view
         , subscriptions = always Sub.none

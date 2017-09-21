@@ -2,13 +2,19 @@ var _user$project$Native_Http = (function() {
     var _Succeed = 0;
     var _Simple = 1;
     var _Complex = 2;
+    var _AndThen = 3;
 
     var succeed = function(value) {
         return { type: _Succeed, value: value };
     };
 
     var request = function(config) {
-        return { type: _Simple, config: config, expect: config.expect };
+        return {
+            type: _Simple,
+            config: config,
+            responseToResult: config.expect._0.responseToResult,
+            responseType: config.expect._0.responseType
+        };
     };
 
     var map = function(op, request) {
@@ -19,11 +25,11 @@ var _user$project$Native_Http = (function() {
                 return {
                     type: _Simple,
                     config: request.config,
-                    expect: function(response) {
+                    responseToResult: function(response) {
                         return A2(
-                            _elm_lang$core$Result.map,
+                            _elm_lang$core$Result$map,
                             op,
-                            request.expect(response)
+                            request.responseToResult(response)
                         );
                     }
                 };
@@ -33,23 +39,26 @@ var _user$project$Native_Http = (function() {
                     left: request.left,
                     right: request.right,
                     combine: F2(function(left, right) {
-                        return A2(
-                            _elm_lang$core$Result.map,
-                            op,
-                            A3(
-                                _elm_lang$core$Result.map2,
-                                request.combine,
-                                left,
-                                right
-                            )
-                        );
+                        return op(A2(request.combine, left, right));
                     })
+                };
+            case _AndThen:
+                return {
+                    type: _AndThen,
+                    request: requestA,
+                    toRequestB: function(response) {
+                        return op(request.toRequestB(response));
+                    }
                 };
         }
     };
 
     var map2 = function(combine, left, right) {
         return { type: _Complex, left: left, right: right, combine: combine };
+    };
+
+    var andThen = function(toRequestB, requestA) {
+        return { type: _AndThen, request: requestA, toRequestB: toRequestB };
     };
 
     function toResponse(xhr) {
@@ -111,6 +120,7 @@ var _user$project$Native_Http = (function() {
         if (result.ctor === 'Ok') {
             return finish(result._0);
         } else {
+            debugger;
             response.body = xhr.responseText;
             return fail({
                 ctor: 'BadPayload',
@@ -120,23 +130,36 @@ var _user$project$Native_Http = (function() {
         }
     };
 
-    function configureRequest(xhr, config) {
+    function configureRequest(xhr, request) {
         function setHeader(pair) {
             xhr.setRequestHeader(pair._0, pair._1);
         }
 
-        A2(_elm_lang$core$List$map, setHeader, config.headers);
-        xhr.responseType = config.responseType;
-        xhr.withCredentials = config.withCredentials;
+        A2(_elm_lang$core$List$map, setHeader, request.config.headers);
+        xhr.responseType = request.responseType;
+        xhr.withCredentials = request.config.withCredentials;
 
-        if (config.timeout.ctor === 'Just') {
-            xhr.timeout = config.timeout._0;
+        if (request.config.timeout.ctor === 'Just') {
+            xhr.timeout = request.config.timeout._0;
         }
     }
 
-    var getBody = function(body) {
-        return '';
-    };
+    function sendXHR(xhr, body) {
+        switch (body.ctor) {
+            case 'EmptyBody':
+                xhr.send();
+                return;
+
+            case 'StringBody':
+                xhr.setRequestHeader('Content-Type', body._0);
+                xhr.send(body._1);
+                return;
+
+            case 'FormDataBody':
+                xhr.send(body._0);
+                return;
+        }
+    }
 
     var send = function(request, aborters, fail, finish) {
         switch (request.type) {
@@ -151,7 +174,7 @@ var _user$project$Native_Http = (function() {
                 });
 
                 xhr.addEventListener('load', function() {
-                    handleResponse(xhr, request.expect, fail, finish);
+                    handleResponse(xhr, request.responseToResult, fail, finish);
                 });
 
                 try {
@@ -160,10 +183,10 @@ var _user$project$Native_Http = (function() {
                     return fail({ ctor: 'BadUrl', _0: request.config.url });
                 }
 
-                configureRequest(xhr, request.config);
+                configureRequest(xhr, request);
                 aborters.push(xhr.abort.bind(xhr));
 
-                xhr.send(getBody(request.config.body));
+                sendXHR(xhr, request.config.body);
 
                 // configure and send request..
                 break;
@@ -192,6 +215,10 @@ var _user$project$Native_Http = (function() {
                 });
 
                 break;
+            case _AndThen:
+                send(request.request, aborters, fail, function(response) {
+                    send(request.toRequestB(response), aborters, fail, finish);
+                });
         }
     };
 
@@ -241,7 +268,8 @@ var _user$project$Native_Http = (function() {
         request: request,
         map: F2(map),
         map2: F3(map2),
-        toTask: toTask
+        toTask: toTask,
+        andThen: F2(andThen)
     };
 })();
 
